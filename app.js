@@ -1127,6 +1127,7 @@
       const textContent = await page.getTextContent();
       const layer = el.querySelector('.textLayer');
       layer.textContent = '';
+      layer.style.setProperty('--scale-factor', String(pdfScale));
       await pdfjsLib.renderTextLayer({
         textContentSource: textContent,
         container: layer,
