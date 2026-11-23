@@ -1,5 +1,6 @@
-// Caches the app shell so it opens offline. Books are stored in IndexedDB, not here.
-const CACHE = 'my-books-v1';
+// Keeps the app shell available offline. Books are stored in IndexedDB, not here.
+// Network first: when online you always get the newest app, when offline the saved copy is used.
+const CACHE = 'my-books-v2';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -16,12 +17,12 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
-      if (res.ok && new URL(e.request.url).origin === location.origin) {
+    fetch(e.request).then((res) => {
+      if (res.ok) {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));
       }
       return res;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
   );
 });
