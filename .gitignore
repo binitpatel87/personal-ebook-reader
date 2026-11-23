@@ -1,0 +1,14 @@
+# Your books and personal files never go to GitHub
+test-books/
+*.epub
+*.pdf
+*.zip
+*.docx
+*.xlsx
+
+# Local tool settings
+.claude/
+
+# System files
+.DS_Store
+Thumbs.db

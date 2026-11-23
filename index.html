@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f2328">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="My Books">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <title>My Books</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- LIBRARY -->
+  <section id="library" class="view active">
+    <header class="topbar">
+      <h1>My Books</h1>
+      <label class="btn primary" for="file-input">+ Add book</label>
+      <input id="file-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple hidden>
+    </header>
+
+    <p id="empty-msg" class="empty" hidden>No books yet. Tap <b>+ Add book</b> to add an EPUB or PDF file you own.</p>
+    <ul id="shelf" class="shelf"></ul>
+    <p class="note">Books and notes are stored in this browser on this device. Use the same browser to see them again.</p>
+  </section>
+
+  <!-- READER -->
+  <section id="reader" class="view">
+    <header class="topbar reader-top">
+      <button id="back-btn" class="btn" aria-label="Back to library">&larr; Library</button>
+      <span id="reader-title" class="reader-title"></span>
+      <button id="notes-btn" class="btn" aria-label="Highlights and bookmarks">Notes</button>
+    </header>
+
+    <div class="reader-body">
+      <div id="epub-view" class="epub-view" hidden></div>
+      <div id="pdf-view" class="pdf-view" hidden>
+        <div class="pdf-pages" id="pdf-pages"></div>
+      </div>
+    </div>
+
+    <footer class="reader-bottom">
+      <button id="prev-btn" class="btn" aria-label="Previous page">&lsaquo;</button>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        <span id="progress-text" class="progress-text">0%</span>
+      </div>
+      <button id="next-btn" class="btn" aria-label="Next page">&rsaquo;</button>
+      <button id="bookmark-btn" class="btn" aria-label="Bookmark this page">Bookmark</button>
+    </footer>
+
+    <!-- Highlight menu shown when text is selected in an EPUB -->
+    <div id="hl-menu" class="hl-menu" hidden>
+      <button id="hl-add" class="btn primary">Highlight</button>
+      <button id="hl-note" class="btn">Add note</button>
+    </div>
+  </section>
+
+  <!-- NOTES PANEL -->
+  <div id="notes-panel" class="panel" hidden>
+    <div class="panel-card">
+      <header class="panel-head">
+        <h2>Highlights &amp; bookmarks</h2>
+        <button id="notes-close" class="btn" aria-label="Close">Close</button>
+      </header>
+      <ul id="notes-list" class="notes-list"></ul>
+    </div>
+  </div>
+
+  <!-- External libraries (pinned versions) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/epub.js/0.3.93/epub.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
