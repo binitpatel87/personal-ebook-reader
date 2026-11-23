@@ -1,7 +1,7 @@
 // Keeps the app shell available offline. Books are stored in IndexedDB, not here.
 // Network first: when online you always get the newest app, when offline the saved copy is used.
 // Google sign-in and Google Drive requests are never touched or cached by this file.
-const CACHE = 'my-books-v3';
+const CACHE = 'my-books-v4';
 const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.webmanifest', './icon.svg'];
 const CACHEABLE_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 
