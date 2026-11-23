@@ -136,6 +136,27 @@ h1, h2 { margin: 0; font-weight: 650; }
 .notes-list .go { border: none; background: none; color: var(--accent); padding: 4px 0; cursor: pointer; font: inherit; }
 .notes-list .hl-text { background: var(--hl); padding: 0 2px; }
 
+/* Cloud bar, chips, busy overlay */
+.cloudbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line);
+  font-size: .85rem; color: var(--muted);
+}
+.cloudbar span { flex: 1; min-width: 160px; }
+.chip {
+  display: inline-block; font-size: .7rem; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); width: fit-content;
+}
+.chip.ok { color: var(--accent); border-color: var(--accent); }
+.book-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.book-actions button { border: none; background: none; color: var(--muted); font-size: .8rem; padding: 6px 0 0; cursor: pointer; text-align: left; }
+.book-actions button.up { color: var(--accent); }
+.loading {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+}
+.loading-card { background: var(--card); color: var(--ink); padding: 18px 24px; border-radius: 12px; font-size: .95rem; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+
 /* Larger screens */
 @media (min-width: 900px) {
   .shelf { padding: 24px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }

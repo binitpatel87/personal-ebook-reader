@@ -18,13 +18,20 @@
   <section id="library" class="view active">
     <header class="topbar">
       <h1>My Books</h1>
+      <button id="sync-btn" class="btn" hidden>Refresh</button>
       <label class="btn primary" for="file-input">+ Add book</label>
       <input id="file-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple hidden>
     </header>
 
+    <div class="cloudbar" id="cloudbar">
+      <span id="cloud-status">Checking cloud sync…</span>
+      <button id="signin-btn" class="btn" hidden>Sign in with Google</button>
+      <button id="signout-btn" class="btn" hidden>Sign out</button>
+    </div>
+
     <p id="empty-msg" class="empty" hidden>No books yet. Tap <b>+ Add book</b> to add an EPUB or PDF file you own.</p>
     <ul id="shelf" class="shelf"></ul>
-    <p class="note">Books and notes are stored in this browser on this device. Use the same browser to see them again.</p>
+    <p class="note" id="storage-note"></p>
   </section>
 
   <!-- READER -->
@@ -70,10 +77,17 @@
     </div>
   </div>
 
+  <!-- Busy overlay (downloading / uploading) -->
+  <div id="loading" class="loading" hidden>
+    <div class="loading-card"><span id="loading-text">Working…</span></div>
+  </div>
+
   <!-- External libraries (pinned versions) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
