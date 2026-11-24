@@ -8,9 +8,6 @@
   const $ = (sel) => document.querySelector(sel);
   const CFG = window.APP_CONFIG || {};
   const FOLDER_NAME = CFG.FOLDER_NAME || 'My Books';
-  // Apps Script mode: a shared library. Sign-in is automatic and books come from one shared Drive folder.
-  const GAS = CFG.MODE === 'gas';
-  if (GAS) document.body.classList.add('gas');
   const PDF_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
 
@@ -160,26 +157,15 @@
     token: null,
     expires: 0,
     email: '',
-    folderId: null,
     client: null,
-    get enabled() { return GAS || !!CFG.GOOGLE_CLIENT_ID; },
-    get signedIn() { return GAS ? !!this.token : (!!this.token && Date.now() < this.expires - 30000); },
+    adminClient: null,   // second sign-in used only on the Sharing page, only by the library owner
+    adminToken: null,
+    adminExpires: 0,
+    get enabled() { return !!CFG.GOOGLE_CLIENT_ID; },
+    get signedIn() { return !!this.token && Date.now() < this.expires - 30000; },
   };
-
-  // Apps Script mode: the server hands the page the signed-in person's token and the shared folder id.
-  function server(fn, ...args) {
-    return new Promise((resolve, reject) => {
-      google.script.run.withSuccessHandler(resolve).withFailureHandler((e) => reject(new Error((e && e.message) || String(e))))[fn](...args);
-    });
-  }
-  async function gasAuth() {
-    const info = await server('getAuthInfo');
-    cloud.token = info.token;
-    cloud.expires = Date.now() + 50 * 60 * 1000;
-    cloud.email = info.email || '';
-    CFG.LIBRARY_FOLDER_ID = info.folderId || '';
-    return info;
-  }
+  // Your "My Books" folder plus any "My Books" folder that someone has shared with you.
+  let libFolders = [];
 
   function restoreToken() {
     try {
@@ -197,7 +183,9 @@
     } catch (_) { /* ignore */ }
   }
   function clearToken() {
-    cloud.token = null; cloud.expires = 0; cloud.email = ''; cloud.folderId = null;
+    cloud.token = null; cloud.expires = 0; cloud.email = '';
+    cloud.adminToken = null; cloud.adminExpires = 0;
+    libFolders = [];
     try { localStorage.removeItem('mybooks-google'); } catch (_) { /* ignore */ }
   }
 
@@ -206,14 +194,8 @@
     const inBtn = $('#signin-btn');
     const outBtn = $('#signout-btn');
     const sync = $('#sync-btn');
-    if (GAS) {
-      status.textContent = message || (cloud.token
-        ? `Shared library · signed in as ${cloud.email || 'your Google account'}`
-        : 'Signing you in…');
-      inBtn.hidden = true; outBtn.hidden = true; sync.hidden = !cloud.token;
-      $('#storage-note').textContent = 'Your reading progress, highlights and notes are private to you. Books you open are kept on this device.';
-      return;
-    }
+    const share = $('#share-btn');
+    share.hidden = true;
     if (!cloud.enabled) {
       status.textContent = 'Cloud sync is not set up yet. Books are saved on this device only.';
       inBtn.hidden = true; outBtn.hidden = true; sync.hidden = true;
@@ -223,6 +205,7 @@
     if (cloud.signedIn) {
       status.textContent = message || `Cloud on · ${cloud.email || 'signed in'} · books are in Google Drive › ${FOLDER_NAME}`;
       inBtn.hidden = true; outBtn.hidden = false; sync.hidden = false;
+      share.hidden = !libFolders.some((f) => f.ownedByMe);
       $('#storage-note').textContent = 'Books sit in your Google Drive. Opened books are also kept on this device for offline reading.';
     } else {
       status.textContent = message || 'Sign in with Google to see your cloud library on any device.';
@@ -258,14 +241,9 @@
     await refreshFromDrive();
   }
 
-  async function gapi(url, opts = {}, retried = false) {
-    if (GAS && (!cloud.token || Date.now() > cloud.expires - 120000)) await gasAuth();
+  async function gapi(url, opts = {}) {
     if (!cloud.token) throw new Error('Not signed in to Google.');
     const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${cloud.token}` } });
-    if (res.status === 401 && GAS && !retried) {
-      await gasAuth();
-      return gapi(url, opts, true);
-    }
     if (res.status === 401) {
       clearToken();
       updateCloudUi('Your Google session ended. Tap Sign in to continue.');
@@ -278,43 +256,53 @@
     return res;
   }
 
-  async function ensureFolder() {
-    if (GAS) {
-      if (!CFG.LIBRARY_FOLDER_ID) throw new Error('The library folder has not been set up yet. Ask the library owner.');
-      return CFG.LIBRARY_FOLDER_ID;
-    }
-    if (cloud.folderId) return cloud.folderId;
+  // Finds every "My Books" folder this person can open: their own, and any shared with them.
+  async function discoverFolders() {
     const q = encodeURIComponent(`name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
-    const found = await (await gapi(`${API}/files?q=${q}&fields=files(id,name)&pageSize=10`)).json();
-    if (found.files && found.files.length) {
-      cloud.folderId = found.files[0].id;
-    } else {
-      const created = await (await gapi(`${API}/files?fields=id`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-        body: JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
-      })).json();
-      cloud.folderId = created.id;
-    }
-    return cloud.folderId;
+    const r = await (await gapi(`${API}/files?q=${q}&fields=files(id,name,ownedByMe,capabilities(canAddChildren),owners(displayName,emailAddress))&pageSize=20`)).json();
+    libFolders = (r.files || []).map((f) => ({
+      id: f.id,
+      ownedByMe: !!f.ownedByMe,
+      canAdd: !!(f.capabilities && f.capabilities.canAddChildren),
+      owner: (f.owners && f.owners[0] && (f.owners[0].displayName || f.owners[0].emailAddress)) || '',
+    }));
+    return libFolders;
   }
 
+  // Books from your own folder and from folders shared with you, together.
   async function listDriveBooks() {
-    const folder = await ensureFolder();
+    const folders = await discoverFolders();
+    if (!folders.length) return [];
+    const parentsClause = folders.map((f) => `'${f.id}' in parents`).join(' or ');
     let files = [];
     let pageToken = '';
     do {
-      const q = encodeURIComponent(`'${folder}' in parents and trashed=false and (mimeType='application/pdf' or mimeType='application/epub+zip' or name contains '.epub' or name contains '.pdf')`);
-      const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime)&pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+      const q = encodeURIComponent(`(${parentsClause}) and trashed=false and (mimeType='application/pdf' or mimeType='application/epub+zip' or name contains '.epub' or name contains '.pdf')`);
+      const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,parents)&pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
       const r = await (await gapi(url)).json();
       files = files.concat(r.files || []);
       pageToken = r.nextPageToken || '';
     } while (pageToken);
-    return files;
+    const mine = new Set(folders.filter((f) => f.ownedByMe).map((f) => f.id));
+    return files.map((f) => ({ ...f, shared: !(f.parents || []).some((p) => mine.has(p)) }));
+  }
+
+  // Where this person's own uploads go: a folder they own, or a new one if they only have shared access.
+  async function ensureUploadFolder() {
+    if (!libFolders.length) await discoverFolders();
+    const writable = libFolders.find((f) => f.ownedByMe && f.canAdd) || libFolders.find((f) => f.canAdd);
+    if (writable) return writable.id;
+    const created = await (await gapi(`${API}/files?fields=id`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+    })).json();
+    libFolders.push({ id: created.id, ownedByMe: true, canAdd: true, owner: '' });
+    return created.id;
   }
 
   async function uploadToDrive(blob, name, mime) {
-    const folder = await ensureFolder();
+    const folder = await ensureUploadFolder();
     const init = await gapi(`${UPLOAD}/files?uploadType=resumable&fields=id`, {
       method: 'POST',
       headers: {
@@ -353,7 +341,11 @@
     const present = new Set(files.map((f) => f.id));
 
     for (const f of files) {
-      if (byDrive.has(f.id)) continue;
+      const existing = byDrive.get(f.id);
+      if (existing) {
+        if (!!existing.shared !== !!f.shared) await db.put('books', { ...existing, shared: !!f.shared });
+        continue;
+      }
       const isPdf = f.mimeType === 'application/pdf' || /\.pdf$/i.test(f.name);
       await db.put('books', {
         id: f.id,
@@ -363,6 +355,7 @@
         author: '',
         cover: null,
         file: null,
+        shared: !!f.shared,
         size: Number(f.size) || 0,
         addedAt: Date.parse(f.modifiedTime) || Date.now(),
       });
@@ -379,15 +372,14 @@
       showLoading('Syncing your Drive library…');
       await syncLibrary();
     } catch (err) {
-      if (GAS && /Drive error (404|403)/.test(err.message)) {
-        updateCloudUi(`You are signed in as ${cloud.email || 'this account'}, but the library has not been shared with this email yet. Ask the library owner to add it.`);
-      } else if (GAS && /not been set up/.test(err.message)) {
-        updateCloudUi(err.message);
-      } else {
-        showError(err);
-      }
+      showError(err);
     } finally {
       hideLoading();
+      if (!libFolders.length) {
+        updateCloudUi(`Signed in as ${cloud.email || 'this account'}. No "${FOLDER_NAME}" library has been shared with you yet. Ask the library owner to share it with this email. You can still add your own books.`);
+      } else {
+        updateCloudUi();
+      }
       await renderLibrary();
     }
   }
@@ -521,8 +513,8 @@
       const meta = h('div', 'book-meta');
       const title = h('div', 'book-title', b.title);
       const chip = h('span', 'chip');
-      if (b.driveId && b.file) { chip.textContent = '☁ Saved offline'; chip.classList.add('ok'); }
-      else if (b.driveId) { chip.textContent = '☁ In Drive'; }
+      if (b.driveId && b.file) { chip.textContent = b.shared ? '👥 Shared · saved offline' : '☁ Saved offline'; chip.classList.add('ok'); }
+      else if (b.driveId) { chip.textContent = b.shared ? '👥 Shared library' : '☁ In Drive'; }
       else { chip.textContent = 'This device only'; }
       const pctEl = h('div', 'book-pct', `${pct}% read`);
       const bar = h('div', 'bar');
@@ -1569,6 +1561,197 @@
     if (e.target.id === 'notes-panel') $('#notes-panel').hidden = true;
   });
 
+  // ---------- sharing the library with friends and family (library owner only) ----------
+  const ADMIN_SCOPE = 'https://www.googleapis.com/auth/drive';
+
+  function ownedFolder() { return libFolders.find((f) => f.ownedByMe); }
+  function appUrl() { return `${location.origin}${location.pathname}`; }
+
+  function shareNote(text, bad) {
+    const n = $('#share-note');
+    n.textContent = text || '';
+    n.className = bad ? 'share-note bad' : 'share-note';
+    n.hidden = !text;
+  }
+
+  function initAdminAuth() {
+    if (cloud.adminClient) return true;
+    if (!cloud.enabled || !(window.google && google.accounts && google.accounts.oauth2)) return false;
+    cloud.adminClient = google.accounts.oauth2.initTokenClient({
+      client_id: CFG.GOOGLE_CLIENT_ID,
+      scope: ADMIN_SCOPE,
+      callback: (resp) => {
+        if (!resp || resp.error) { shareNote(`Could not unlock sharing: ${resp && resp.error ? resp.error : 'cancelled'}`, true); return; }
+        cloud.adminToken = resp.access_token;
+        cloud.adminExpires = Date.now() + (Number(resp.expires_in) || 3600) * 1000;
+        loadShare();
+      },
+      error_callback: (e) => shareNote(`Sign-in did not finish (${(e && (e.type || e.message)) || 'cancelled'}).`, true),
+    });
+    return true;
+  }
+
+  async function adminFetch(url, opts = {}) {
+    if (!cloud.adminToken || Date.now() > cloud.adminExpires - 30000) throw new Error('Sharing tools are locked. Tap "Unlock sharing tools".');
+    const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${cloud.adminToken}` } });
+    if (res.status === 401) {
+      cloud.adminToken = null;
+      throw new Error('Sharing tools were locked. Tap "Unlock sharing tools" again.');
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Google Drive error ${res.status}: ${t.slice(0, 200)}`);
+    }
+    return res;
+  }
+
+  function openSharePanel() {
+    $('#share-panel').hidden = false;
+    renderShare();
+  }
+
+  function renderShare(forceLocked = false) {
+    const body = $('#share-body');
+    body.textContent = '';
+    const f = ownedFolder();
+    if (!f) {
+      body.appendChild(h('p', '', `You do not own a "${FOLDER_NAME}" folder yet. Add a book first, then come back.`));
+      return;
+    }
+    body.appendChild(h('p', '', `Everyone you add below can read every book in your "${FOLDER_NAME}" folder in Google Drive, including books you add later. They cannot change or delete anything. Nobody gets a password: they sign in with their own Google account.`));
+    const note = h('div', 'share-note');
+    note.id = 'share-note';
+    note.hidden = true;
+    body.appendChild(note);
+
+    if (!forceLocked && cloud.adminToken && Date.now() < cloud.adminExpires - 30000) { loadShare(); return; }
+
+    body.appendChild(h('p', 'muted', 'To manage sharing, Google will ask once for permission to share files in your Drive. This is used only on this page, only for your own account, and friends are never asked for it.'));
+    const unlock = h('button', 'btn primary', 'Unlock sharing tools');
+    unlock.addEventListener('click', () => {
+      if (!initAdminAuth()) { shareNote('Google sign-in is still loading. Try again in a moment.', true); return; }
+      cloud.adminClient.requestAccessToken({ prompt: '' });
+    });
+    body.appendChild(unlock);
+    const manual = h('p', 'muted');
+    manual.appendChild(document.createTextNode('Prefer to do it yourself? '));
+    const a = h('a', '', 'Open the folder in Google Drive');
+    a.href = `https://drive.google.com/drive/folders/${f.id}`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    manual.appendChild(a);
+    manual.appendChild(document.createTextNode(' and use Share.'));
+    body.appendChild(manual);
+  }
+
+  async function loadShare() {
+    const f = ownedFolder();
+    if (!f) return;
+    const body = $('#share-body');
+    body.textContent = 'Loading…';
+    let perms = [];
+    try {
+      const r = await adminFetch(`${API}/files/${f.id}/permissions?fields=permissions(id,type,role,emailAddress,displayName)&pageSize=100`);
+      perms = (await r.json()).permissions || [];
+    } catch (err) {
+      renderShare(true);
+      shareNote(err.message, true);
+      return;
+    }
+    body.textContent = '';
+    body.appendChild(h('p', '', `Everyone you add can read every book in your "${FOLDER_NAME}" folder. They cannot change or delete anything. Nobody gets a password: they sign in with their own Google account.`));
+    const note = h('div', 'share-note');
+    note.id = 'share-note';
+    note.hidden = true;
+    body.appendChild(note);
+
+    const anyone = perms.find((p) => p.type === 'anyone');
+    if (anyone) {
+      const warn = h('div', 'share-note bad');
+      warn.appendChild(h('b', '', 'Anyone with the link can read this folder.'));
+      warn.appendChild(document.createTextNode(' Only the people listed below should have access.'));
+      const off = h('button', 'btn danger', 'Turn off link sharing');
+      off.style.marginTop = '8px';
+      off.addEventListener('click', async () => {
+        try { await adminFetch(`${API}/files/${f.id}/permissions/${anyone.id}`, { method: 'DELETE' }); toast('Link sharing is off.'); loadShare(); } catch (e) { shareNote(e.message, true); }
+      });
+      warn.appendChild(document.createElement('br'));
+      warn.appendChild(off);
+      body.appendChild(warn);
+    }
+
+    const form = h('form', 'share-form');
+    const input = document.createElement('input');
+    input.type = 'email';
+    input.required = true;
+    input.placeholder = 'friend@gmail.com';
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', 'Friend\'s Google email');
+    const add = h('button', 'btn primary', 'Give read access');
+    add.type = 'submit';
+    form.append(input, add);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = input.value.trim().toLowerCase();
+      if (!email) return;
+      add.disabled = true;
+      try {
+        const msg = `You can now read my library in the My Books reader: ${appUrl()}`;
+        await adminFetch(`${API}/files/${f.id}/permissions?sendNotificationEmail=true&emailMessage=${encodeURIComponent(msg)}&fields=id`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'user', role: 'reader', emailAddress: email }),
+        });
+        await loadShare();
+        shareNote(`Done. ${email} can now read the library. Also add them as a test user (see below).`);
+      } catch (err) {
+        add.disabled = false;
+        shareNote(err.message, true);
+      }
+    });
+    body.appendChild(form);
+
+    const people = perms.filter((p) => p.type === 'user' || p.type === 'group' || p.type === 'domain');
+    const head = h('h3', 'share-h', `People with access (${people.filter((p) => p.role !== 'owner').length})`);
+    body.appendChild(head);
+    const ul = h('ul', 'share-list');
+    for (const p of people) {
+      const li = h('li', 'share-row');
+      const who = h('div', 'who');
+      who.appendChild(document.createTextNode(`${p.displayName ? `${p.displayName} · ` : ''}${p.emailAddress || p.type}`));
+      who.appendChild(h('span', 'chip', p.role === 'owner' ? 'You (owner)' : p.role === 'reader' ? 'Reader' : p.role));
+      li.appendChild(who);
+      if (p.role !== 'owner') {
+        const rm = h('button', 'btn danger', 'Remove');
+        rm.addEventListener('click', async () => {
+          if (!confirm(`Remove access for ${p.emailAddress || 'this person'}? They will no longer see your library.`)) return;
+          try {
+            await adminFetch(`${API}/files/${f.id}/permissions/${p.id}`, { method: 'DELETE' });
+            await loadShare();
+            shareNote(`${p.emailAddress || 'That person'} can no longer read the library.`);
+          } catch (err) { shareNote(err.message, true); }
+        });
+        li.appendChild(rm);
+      }
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+
+    const linkRow = h('div', 'share-link');
+    linkRow.appendChild(h('div', 'muted', 'Send them this link:'));
+    const code = h('code', '', appUrl());
+    const copy = h('button', 'btn', 'Copy link');
+    copy.addEventListener('click', async () => { toast((await copyText(appUrl())) ? 'Link copied.' : 'Could not copy. Select the link and copy it.'); });
+    linkRow.append(code, copy);
+    body.appendChild(linkRow);
+
+    body.appendChild(h('p', 'muted', 'While the app is in Google\'s testing mode, also add each friend\'s email in Google Cloud Console › Google Auth Platform › Audience › Test users (up to 100 people). Without this, Google will refuse their sign-in.'));
+  }
+
+  $('#share-btn').addEventListener('click', openSharePanel);
+  $('#share-close').addEventListener('click', () => { $('#share-panel').hidden = true; });
+  $('#share-panel').addEventListener('click', (e) => { if (e.target.id === 'share-panel') $('#share-panel').hidden = true; });
+
   // ---------- cloud buttons ----------
   $('#signin-btn').addEventListener('click', () => {
     if (!cloud.client && !initAuth()) {
@@ -1595,18 +1778,6 @@
 
   // ---------- start ----------
   async function start() {
-    if (GAS) {
-      updateCloudUi();
-      await renderLibrary();
-      try {
-        await gasAuth();
-        updateCloudUi();
-        await refreshFromDrive();
-      } catch (err) {
-        updateCloudUi(`Could not sign you in: ${err.message}`);
-      }
-      return;
-    }
     restoreToken();
     updateCloudUi();
     await renderLibrary();

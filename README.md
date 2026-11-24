@@ -12,6 +12,14 @@ A web app for reading EPUB and PDF files you own, on a phone, tablet, or PC brow
 - Installs to the home screen on iPhone, Android, and PC
 - Works on this device only (no Google) until cloud sync is set up
 
+## Sharing the library with friends and family
+The library is the **My Books** folder in the owner's Google Drive. Everything in it can be read by the people the owner adds.
+- **Owner:** sign in, tap **Sharing**, tap **Unlock sharing tools** (Google asks once for permission to share files), then type a friend's Google email and tap **Give read access**. **Remove** takes access away at once. The page warns if the folder is shared with "anyone with the link" and can switch that off.
+- **Friends:** open the app link, sign in with the Google account that was added, and the owner's books appear marked **Shared library**. They can read, highlight and annotate. Their progress, highlights and notes stay private to them. They cannot change or delete the owner's books, and they can still add books of their own.
+- **No passwords** are shared. Access is controlled by Google Drive sharing.
+- **Google Cloud test users:** while the app is in Google's testing mode, also add each friend's email under Google Cloud Console › Google Auth Platform › Audience › Test users (up to 100 people).
+- Only share books you have the right to share.
+
 ## Not yet included
 - PDF highlights
 - DRM-protected books (Apple Books and Kindle purchases cannot be opened)

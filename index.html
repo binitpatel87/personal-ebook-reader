@@ -18,6 +18,7 @@
   <section id="library" class="view active">
     <header class="topbar">
       <h1>My Books</h1>
+      <button id="share-btn" class="btn" hidden>Sharing</button>
       <button id="sync-btn" class="btn" hidden>Refresh</button>
       <label class="btn primary" for="file-input">+ Add book</label>
       <input id="file-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple hidden>
@@ -84,6 +85,17 @@
         <button id="notes-close" class="btn" aria-label="Close">Close</button>
       </header>
       <ul id="notes-list" class="notes-list"></ul>
+    </div>
+  </div>
+
+  <!-- SHARE THE LIBRARY (owner only) -->
+  <div id="share-panel" class="panel" hidden>
+    <div class="panel-card">
+      <header class="panel-head">
+        <h2>Share your library</h2>
+        <button id="share-close" class="btn" aria-label="Close">Close</button>
+      </header>
+      <div id="share-body" class="share-body"></div>
     </div>
   </div>
 
