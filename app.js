@@ -8,6 +8,9 @@
   const $ = (sel) => document.querySelector(sel);
   const CFG = window.APP_CONFIG || {};
   const FOLDER_NAME = CFG.FOLDER_NAME || 'My Books';
+  // Apps Script mode: a shared library. Sign-in is automatic and books come from one shared Drive folder.
+  const GAS = CFG.MODE === 'gas';
+  if (GAS) document.body.classList.add('gas');
   const PDF_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
 
@@ -43,6 +46,9 @@
 
   // ---------- local storage (IndexedDB) ----------
   let dbPromise = null;
+  let useMem = false; // some browsers block storage inside embedded pages; keep working in memory then
+  const mem = { books: new Map(), progress: new Map(), notes: new Map(), meta: new Map() };
+  const KEYS = { books: 'id', progress: 'bookId', notes: 'id', meta: 'key' };
 
   function openDb() {
     if (!dbPromise) {
@@ -75,12 +81,30 @@
     }));
   }
 
+  async function memOp(kind, store, arg) {
+    const m = mem[store];
+    if (kind === 'get') return m.get(arg);
+    if (kind === 'all') return [...m.values()];
+    if (kind === 'byBook') return [...m.values()].filter((v) => v.bookId === arg);
+    if (kind === 'put') { m.set(arg[KEYS[store]], arg); return arg[KEYS[store]]; }
+    if (kind === 'del') { m.delete(arg); }
+    return undefined;
+  }
+
+  async function dbCall(kind, store, arg, mode, idbFn) {
+    if (!useMem) {
+      try { await openDb(); } catch (_) { useMem = true; }
+    }
+    if (useMem) return memOp(kind, store, arg);
+    return run(store, mode, idbFn);
+  }
+
   const db = {
-    get: (store, key) => run(store, 'readonly', (s) => s.get(key)),
-    all: (store) => run(store, 'readonly', (s) => s.getAll()),
-    byBook: (store, bookId) => run(store, 'readonly', (s) => s.index('bookId').getAll(bookId)),
-    put: (store, value) => run(store, 'readwrite', (s) => s.put(value)),
-    del: (store, key) => run(store, 'readwrite', (s) => s.delete(key)),
+    get: (store, key) => dbCall('get', store, key, 'readonly', (s) => s.get(key)),
+    all: (store) => dbCall('all', store, null, 'readonly', (s) => s.getAll()),
+    byBook: (store, bookId) => dbCall('byBook', store, bookId, 'readonly', (s) => s.index('bookId').getAll(bookId)),
+    put: (store, value) => dbCall('put', store, value, 'readwrite', (s) => s.put(value)),
+    del: (store, key) => dbCall('del', store, key, 'readwrite', (s) => s.delete(key)),
   };
 
   async function getDeleted(bookId) {
@@ -138,9 +162,24 @@
     email: '',
     folderId: null,
     client: null,
-    get enabled() { return !!CFG.GOOGLE_CLIENT_ID; },
-    get signedIn() { return !!this.token && Date.now() < this.expires - 30000; },
+    get enabled() { return GAS || !!CFG.GOOGLE_CLIENT_ID; },
+    get signedIn() { return GAS ? !!this.token : (!!this.token && Date.now() < this.expires - 30000); },
   };
+
+  // Apps Script mode: the server hands the page the signed-in person's token and the shared folder id.
+  function server(fn, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler((e) => reject(new Error((e && e.message) || String(e))))[fn](...args);
+    });
+  }
+  async function gasAuth() {
+    const info = await server('getAuthInfo');
+    cloud.token = info.token;
+    cloud.expires = Date.now() + 50 * 60 * 1000;
+    cloud.email = info.email || '';
+    CFG.LIBRARY_FOLDER_ID = info.folderId || '';
+    return info;
+  }
 
   function restoreToken() {
     try {
@@ -167,6 +206,14 @@
     const inBtn = $('#signin-btn');
     const outBtn = $('#signout-btn');
     const sync = $('#sync-btn');
+    if (GAS) {
+      status.textContent = message || (cloud.token
+        ? `Shared library · signed in as ${cloud.email || 'your Google account'}`
+        : 'Signing you in…');
+      inBtn.hidden = true; outBtn.hidden = true; sync.hidden = !cloud.token;
+      $('#storage-note').textContent = 'Your reading progress, highlights and notes are private to you. Books you open are kept on this device.';
+      return;
+    }
     if (!cloud.enabled) {
       status.textContent = 'Cloud sync is not set up yet. Books are saved on this device only.';
       inBtn.hidden = true; outBtn.hidden = true; sync.hidden = true;
@@ -211,9 +258,14 @@
     await refreshFromDrive();
   }
 
-  async function gapi(url, opts = {}) {
+  async function gapi(url, opts = {}, retried = false) {
+    if (GAS && (!cloud.token || Date.now() > cloud.expires - 120000)) await gasAuth();
     if (!cloud.token) throw new Error('Not signed in to Google.');
     const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${cloud.token}` } });
+    if (res.status === 401 && GAS && !retried) {
+      await gasAuth();
+      return gapi(url, opts, true);
+    }
     if (res.status === 401) {
       clearToken();
       updateCloudUi('Your Google session ended. Tap Sign in to continue.');
@@ -227,6 +279,10 @@
   }
 
   async function ensureFolder() {
+    if (GAS) {
+      if (!CFG.LIBRARY_FOLDER_ID) throw new Error('The library folder has not been set up yet. Ask the library owner.');
+      return CFG.LIBRARY_FOLDER_ID;
+    }
     if (cloud.folderId) return cloud.folderId;
     const q = encodeURIComponent(`name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
     const found = await (await gapi(`${API}/files?q=${q}&fields=files(id,name)&pageSize=10`)).json();
@@ -323,7 +379,13 @@
       showLoading('Syncing your Drive library…');
       await syncLibrary();
     } catch (err) {
-      showError(err);
+      if (GAS && /Drive error (404|403)/.test(err.message)) {
+        updateCloudUi(`You are signed in as ${cloud.email || 'this account'}, but the library has not been shared with this email yet. Ask the library owner to add it.`);
+      } else if (GAS && /not been set up/.test(err.message)) {
+        updateCloudUi(err.message);
+      } else {
+        showError(err);
+      }
     } finally {
       hideLoading();
       await renderLibrary();
@@ -685,11 +747,28 @@
     return (pendingSelection && pendingSelection.text) || '';
   }
 
+  function copyViaTextarea(text) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+      return navigator.clipboard.writeText(text).then(() => true).catch(() => copyViaTextarea(text));
     }
-    return Promise.resolve(false);
+    return Promise.resolve(copyViaTextarea(text));
   }
 
   function askGemini(text) {
@@ -1516,6 +1595,18 @@
 
   // ---------- start ----------
   async function start() {
+    if (GAS) {
+      updateCloudUi();
+      await renderLibrary();
+      try {
+        await gasAuth();
+        updateCloudUi();
+        await refreshFromDrive();
+      } catch (err) {
+        updateCloudUi(`Could not sign you in: ${err.message}`);
+      }
+      return;
+    }
     restoreToken();
     updateCloudUi();
     await renderLibrary();

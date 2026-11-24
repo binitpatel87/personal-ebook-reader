@@ -157,6 +157,9 @@ h1, h2 { margin: 0; font-weight: 650; }
 }
 .loading-card { background: var(--card); color: var(--ink); padding: 18px 24px; border-radius: 12px; font-size: .95rem; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
 
+/* Apps Script (shared library) mode: friends read only, no uploading or sign-in buttons */
+.gas label[for="file-input"], .gas #signin-btn, .gas #signout-btn, .gas .book-actions .up { display: none !important; }
+
 /* Reader surface follows the chosen page colour */
 .reader-body { background: var(--reader-bg, var(--bg)); }
 
